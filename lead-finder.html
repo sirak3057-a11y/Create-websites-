@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lead finder – businesses without a website</title>
+<style>
+:root{--bg:#EEF2F7;--ink:#14213D;--muted:#55627A;--blue:#2F5BFF;--mint:#19B38A;--card:#fff;--line:#D8E0EC}
+@media (prefers-color-scheme:dark){:root{--bg:#0E1626;--ink:#EAF0FA;--muted:#9AA8C2;--card:#16213A;--line:#26334F}}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:400 16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px 18px 60px}
+main{max-width:760px;margin:0 auto}
+h1{font-size:28px;letter-spacing:-.02em;margin-bottom:6px}
+.sub{color:var(--muted);margin-bottom:24px}
+form{display:grid;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+label{display:grid;gap:4px;font-size:14px;color:var(--muted)}
+input[type=text],input[type=password]{font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:12px}
+input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.chk{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ink)}
+button{font:500 16px inherit;font-family:inherit;background:var(--blue);color:#fff;border:0;border-radius:12px;padding:14px;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+#msg{margin:20px 0 10px;color:var(--muted)}
+#msg.err{color:#C0392B}
+.list{display:grid;gap:12px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.item h3{font-size:18px;margin-bottom:2px}
+.item p{color:var(--muted);font-size:15px}
+.tag{display:inline-block;font-size:13px;border-radius:999px;padding:2px 10px;margin:8px 0;background:var(--mint);color:#fff}
+.tag.social{background:#E08A00}
+.acts{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
+.acts a{color:var(--blue);font-weight:500}
+.acts .cp{background:transparent;color:var(--blue);padding:0;font-weight:500;font-size:16px;border-radius:0}
+.hint{color:var(--muted);font-size:14px;margin-top:28px}
+@media (max-width:520px){.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>Find businesses without a website</h1>
+<p class="sub">Enter a business type and a city. The list shows local businesses that have no website on their Google listing.</p>
+
+<form id="f">
+<label>Google Places API key
+<input id="key" type="password" autocomplete="off" placeholder="Paste your key (saved only in this browser)" required></label>
+<div class="two">
+<label>Business type<input id="type" type="text" placeholder="e.g. barbers, restaurants, plumbers" required></label>
+<label>City<input id="city" type="text" placeholder="e.g. Haifa, Tel Aviv, חיפה" required></label>
+</div>
+<label>Your website URL (used in the message you send to each business)
+<input id="myurl" type="text" inputmode="url" placeholder="https://yourwebsite.com"></label>
+<label class="chk"><input id="social" type="checkbox" checked> Also show businesses that only have a Facebook or Instagram page</label>
+<button id="go" type="submit">Find businesses</button>
+</form>
+
+<p id="msg" role="status"></p>
+<div id="out" class="list"></div>
+
+<p class="hint">Results come from Google listings, which are not always complete. Before you contact a business, search for its name to confirm it really has no website.</p>
+</main>
+
+<script>
+var $ = function(id){ return document.getElementById(id); };
+var SOCIAL = /(facebook\.com|fb\.com|instagram\.com|linktr\.ee|tiktok\.com|wa\.me|linkedin\.com|twitter\.com|x\.com|business\.site)/i;
+
+try {
+  $('key').value = localStorage.getItem('placesKey') || '';
+  $('myurl').value = localStorage.getItem('myUrl') || '';
+} catch (e) {}
+
+function el(tag, cls, text){
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text) n.textContent = text;
+  return n;
+}
+function link(text, href){
+  var a = el('a', '', text);
+  a.href = href; a.target = '_blank'; a.rel = 'noopener';
+  return a;
+}
+function pitch(name, url){
+  return 'Hi, I found ' + name + ' on Google and noticed you don\'t have a website yet. '
+    + 'I build modern, fast websites for local businesses, and you own everything. '
+    + (url ? 'You can see my work here: ' + url + ' ' : '')
+    + 'Would you like a free quote?';
+}
+function copyText(t, btn){
+  var done = function(){ var o = btn.textContent; btn.textContent = 'Copied'; setTimeout(function(){ btn.textContent = o; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done, function(){ prompt('Copy this message:', t); }); }
+  else { prompt('Copy this message:', t); }
+}
+function setMsg(t, err){ var m = $('msg'); m.textContent = t; m.className = err ? 'err' : ''; }
+
+async function fetchAll(key, query){
+  var hasHebrew = /[\u0590-\u05FF]/.test(query);
+  var all = [], token = null;
+  for (var page = 0; page < 3; page++){
+    var body = { textQuery: query, pageSize: 20, regionCode: 'IL', languageCode: hasHebrew ? 'he' : 'en' };
+    if (token) body.pageToken = token;
+    var res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.rating,places.userRatingCount,nextPageToken'
+      },
+      body: JSON.stringify(body)
+    });
+    var data = await res.json();
+    if (!res.ok) throw new Error((data.error && data.error.message) || 'Request failed');
+    all = all.concat(data.places || []);
+    token = data.nextPageToken;
+    if (!token) break;
+  }
+  return all;
+}
+
+$('f').addEventListener('submit', async function(e){
+  e.preventDefault();
+  var key = $('key').value.trim();
+  var query = $('type').value.trim() + ' in ' + $('city').value.trim();
+  var myUrl = $('myurl').value.trim();
+  var cityVal = $('city').value.trim();
+  try { localStorage.setItem('placesKey', key); localStorage.setItem('myUrl', myUrl); } catch (err) {}
+  var btn = $('go'), out = $('out');
+  btn.disabled = true; out.textContent = ''; setMsg('Searching…');
+  try {
+    var places = await fetchAll(key, query);
+    var showSocial = $('social').checked;
+    var leads = places.map(function(p){
+      var w = p.websiteUri;
+      p._status = !w ? 'none' : (SOCIAL.test(w) ? 'social' : 'site');
+      return p;
+    }).filter(function(p){ return p._status === 'none' || (showSocial && p._status === 'social'); });
+
+    setMsg('Checked ' + places.length + ' businesses. ' + leads.length + ' without a proper website.');
+    if (!places.length) setMsg('No businesses found. Check the spelling of the type and city.', true);
+
+    leads.forEach(function(p){
+      var card = el('div', 'item');
+      card.appendChild(el('h3', '', (p.displayName && p.displayName.text) || 'Unnamed business'));
+      card.appendChild(el('p', '', p.formattedAddress || ''));
+      var tag = el('span', 'tag' + (p._status === 'social' ? ' social' : ''),
+        p._status === 'none' ? 'No website' : 'Social page only');
+      card.appendChild(tag);
+      if (p.rating) card.appendChild(el('p', '', 'Rating ' + p.rating + ' (' + (p.userRatingCount || 0) + ' reviews)'));
+      var acts = el('div', 'acts');
+      if (p.nationalPhoneNumber) acts.appendChild(link('Call ' + p.nationalPhoneNumber, 'tel:' + p.nationalPhoneNumber.replace(/[^\d+]/g, '')));
+      if (p.websiteUri) acts.appendChild(link('See their page', p.websiteUri));
+      if (p.googleMapsUri) acts.appendChild(link('Open in Maps', p.googleMapsUri));
+      var nm = (p.displayName && p.displayName.text) || '';
+      var q = function(site){ return 'https://www.google.com/search?q=' + encodeURIComponent('site:' + site + ' ' + nm + ' ' + cityVal); };
+      acts.appendChild(link('Find on Facebook', q('facebook.com')));
+      acts.appendChild(link('Find on Instagram', q('instagram.com')));
+      var cp = el('button', 'cp', 'Copy message');
+      cp.type = 'button';
+      cp.addEventListener('click', function(){ copyText(pitch((p.displayName && p.displayName.text) || 'your business', myUrl), cp); });
+      acts.appendChild(cp);
+      card.appendChild(acts);
+      out.appendChild(card);
+    });
+  } catch (err) {
+    setMsg('Error: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
